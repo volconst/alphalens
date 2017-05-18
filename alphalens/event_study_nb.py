@@ -435,13 +435,16 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
     liquid_stocks = None
     
     print "Running Event Study"
-    for _, date_group in event_data.groupby([event_data[date_column].dt.year, event_data[date_column].dt.weekofyear//weeks_to_fetch]):
+    # Getting 10 extra days of data just to be sure
+    extra_days_before = timedelta(days=math.ceil(days_before * 365.0/252.0) + 10)
+    extra_days_after = timedelta(days=math.ceil(days_after * 365.0/252.0) + 10)
+    benchmark_prices = get_pricing(benchmark, start_date=event_data[date_column].min()-extra_days_before,
+                                   end_date=event_data[date_column].max()+extra_days_after, fields='open_price')
+    for _, date_group in event_data.groupby([event_data[date_column].dt.year,
+                                             event_data[date_column].dt.weekofyear//weeks_to_fetch]):
         
-        # Getting 10 extra days of data just to be sure
-        extra_days_before = math.ceil(days_before * 365.0/252.0) + 10
-        start_date = date_group[date_column].min() - timedelta(days=extra_days_before)
-        extra_days_after = math.ceil(days_after * 365.0/252.0) + 10
-        end_date   = date_group[date_column].max() + timedelta(days=extra_days_after)
+        start_date = date_group[date_column].min() - extra_days_before
+        end_date   = date_group[date_column].max() + extra_days_after
 
         # duplicated columns would break get_cum_returns
         pr_sids = set(date_group.sid)
@@ -449,12 +452,12 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
             if liquid_stocks is None:
                 liquid_stocks = get_liquid_universe_of_stocks(start_date, start_date, top_liquid=top_liquid)
             pr_sids.intersection_update(liquid_stocks)
-        pr_sids.update([benchmark])
 
         #print 'pr_sids', [sid.symbol for sid in pr_sids]
         print 'get_pricing(%d sids, %s, %s)'%(len(pr_sids), start_date.date(), end_date.date())
         prices = get_pricing(pr_sids, start_date=start_date,
                              end_date=end_date, fields='open_price')
+        prices[benchmark_prices.name] = benchmark_prices
         prices = prices.shift(-1)  #why?
 
         for _, row in date_group[['sid', date_column]].iterrows():
