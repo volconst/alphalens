@@ -433,8 +433,7 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
     liquid_stocks = None
     
     print "Running Event Study"
-    for i, row in event_data[['sid', date_column]].iterrows():
-        sid, date = row
+    for date, date_group in event_data[['sid', date_column]].groupby(date_column):
         
         # Getting 10 extra days of data just to be sure
         extra_days_before = math.ceil(days_before * 365.0/252.0) + 10
@@ -442,28 +441,36 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
         extra_days_after = math.ceil(days_after * 365.0/252.0) + 10
         end_date   = date + timedelta(days=extra_days_after)
 
+        # duplicated columns would break get_cum_returns
+        pr_sids = set(date_group.sid)
         if use_liquid_stocks:
             if liquid_stocks is None:
                 liquid_stocks = get_liquid_universe_of_stocks(date, date, top_liquid=top_liquid)
-            if sid not in liquid_stocks:
-                continue
-                
-        valid_sids.append(sid)
+            pr_sids.intersection_update(liquid_stocks)
+        pr_sids.update([benchmark])
 
-        # duplicated columns would break get_cum_returns
-        pr_sids = set([sid, benchmark])
         prices = get_pricing(pr_sids, start_date=start_date,
                              end_date=end_date, fields='open_price')
-        prices = prices.shift(-1)
-        if date in prices.index:
-            results = get_cum_returns(prices, sid, date, days_before, days_after, benchmark)
-            if results is None:
-                print "Discarding event for %s on %s" % (symbols(sid),date)
+        prices = prices.shift(-1)  #why?
+
+        for _, row in date_group.iterrows():
+            #sid, date = row
+            sid = row.sid
+                
+            if use_liquid_stocks and sid not in liquid_stocks:
                 continue
-            sid_returns, b_returns, ab_returns = results
-            cumulative_returns.append(sid_returns)
-            benchmark_returns.append(b_returns)
-            abnormal_returns.append(ab_returns)
+            valid_sids.append(sid)
+
+            #print 'get_pricing', pr_sids
+            if date in prices.index:
+                results = get_cum_returns(prices, sid, date, days_before, days_after, benchmark)
+                if results is None:
+                    print "Discarding event for %s on %s" % (symbols(sid),date)
+                    continue
+                sid_returns, b_returns, ab_returns = results
+                cumulative_returns.append(sid_returns)
+                benchmark_returns.append(b_returns)
+                abnormal_returns.append(ab_returns)
             
     sample_size = len(cumulative_returns)
     returns_volatility          = pd.concat(cumulative_returns, axis=1).std(axis=1)
@@ -555,6 +562,7 @@ from quantopian.interactive.data.zacks import earnings_surprises
 # [2013, 2014)
 #years = range(2013, 2015)
 years = 2015,
+import time
 
 # Negative earnings surprises of -50% or more
 # Break it up into years so we can actually load in all the data
@@ -566,4 +574,6 @@ for year in years:
     temp_data = temp_data[temp_data.asof_date <= pd.to_datetime(end)]
     df = odo(temp_data, pd.DataFrame)
     print "Running event study for %s" % year
+    start_time = time.time()
     run_event_study(df, start_date=start, end_date=end, use_liquid_stocks=False, top_liquid=500)
+    print 'took', time.time()-start_time, 'seconds'
