@@ -553,7 +553,8 @@ def run_event_study(event_data, date_column='asof_date',
 from quantopian.interactive.data.zacks import earnings_surprises
 
 # [2013, 2014)
-years = range(2013, 2015)
+#years = range(2013, 2015)
+years = 2015,
 
 # Negative earnings surprises of -50% or more
 # Break it up into years so we can actually load in all the data
@@ -566,9 +567,3 @@ for year in years:
     df = odo(temp_data, pd.DataFrame)
     print "Running event study for %s" % year
     run_event_study(df, start_date=start, end_date=end, use_liquid_stocks=False, top_liquid=500)
-
-
-# In[ ]:
-
-
-
