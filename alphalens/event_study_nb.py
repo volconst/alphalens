@@ -394,6 +394,8 @@ def plot_cumulative_abnormal_returns(cumulative_returns,
     plt.legend(["Abnormal Average Cumulative","Simple Average Cumulative", 'Drift'])
     plt.show()
     
+weeks_to_fetch = 3
+
 def get_returns(event_data, benchmark, date_column, days_before, days_after,
                 use_liquid_stocks=False, top_liquid=1000):
     """
@@ -433,29 +435,30 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
     liquid_stocks = None
     
     print "Running Event Study"
-    for date, date_group in event_data[['sid', date_column]].groupby(date_column):
+    for _, date_group in df.groupby([df[date_column].dt.year, df[date_column].dt.weekofyear//weeks_to_fetch]):
         
         # Getting 10 extra days of data just to be sure
         extra_days_before = math.ceil(days_before * 365.0/252.0) + 10
-        start_date = date - timedelta(days=extra_days_before)
+        start_date = date_group[date_column].min() - timedelta(days=extra_days_before)
         extra_days_after = math.ceil(days_after * 365.0/252.0) + 10
-        end_date   = date + timedelta(days=extra_days_after)
+        end_date   = date_group[date_column].max() + timedelta(days=extra_days_after)
 
         # duplicated columns would break get_cum_returns
         pr_sids = set(date_group.sid)
         if use_liquid_stocks:
             if liquid_stocks is None:
-                liquid_stocks = get_liquid_universe_of_stocks(date, date, top_liquid=top_liquid)
+                liquid_stocks = get_liquid_universe_of_stocks(start_date, start_date, top_liquid=top_liquid)
             pr_sids.intersection_update(liquid_stocks)
         pr_sids.update([benchmark])
 
+        #print 'pr_sids', [sid.symbol for sid in pr_sids]
+        print 'get_pricing(%d sids, %s, %s)'%(len(pr_sids), start_date.date(), end_date.date())
         prices = get_pricing(pr_sids, start_date=start_date,
                              end_date=end_date, fields='open_price')
         prices = prices.shift(-1)  #why?
 
-        for _, row in date_group.iterrows():
-            #sid, date = row
-            sid = row.sid
+        for _, row in date_group[['sid', date_column]].iterrows():
+            sid, date = row
                 
             if use_liquid_stocks and sid not in liquid_stocks:
                 continue
@@ -465,7 +468,7 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
             if date in prices.index:
                 results = get_cum_returns(prices, sid, date, days_before, days_after, benchmark)
                 if results is None:
-                    print "Discarding event for %s on %s" % (symbols(sid),date)
+                    print "Discarding event for %s on %s" % (symbols(sid), date.date())
                     continue
                 sid_returns, b_returns, ab_returns = results
                 cumulative_returns.append(sid_returns)
@@ -482,7 +485,6 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
         
     return (cumulative_returns, benchmark_returns, abnormal_returns,
             returns_volatility, abnormal_returns_volatility, valid_sids)
-
 
 # In[8]:
 
