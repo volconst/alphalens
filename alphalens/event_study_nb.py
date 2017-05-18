@@ -435,7 +435,7 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
     liquid_stocks = None
     
     print "Running Event Study"
-    for _, date_group in df.groupby([df[date_column].dt.year, df[date_column].dt.weekofyear//weeks_to_fetch]):
+    for _, date_group in event_data.groupby([event_data[date_column].dt.year, event_data[date_column].dt.weekofyear//weeks_to_fetch]):
         
         # Getting 10 extra days of data just to be sure
         extra_days_before = math.ceil(days_before * 365.0/252.0) + 10
