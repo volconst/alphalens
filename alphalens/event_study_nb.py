@@ -161,19 +161,23 @@ def get_cum_returns(prices, sid, date, days_before, days_after, benchmark_sid):
     """
 
     day_zero_index = prices.index.searchsorted(date)
+    #print 'day_zero_index', day_zero_index
     starting_index = max(day_zero_index - days_before, 0)
     ending_index   = min(day_zero_index + days_after + 1, len(prices.index) - 1)
 
     if starting_index < 0 or ending_index >= len(prices.index):
+        assert False #is this possible
         return None
     
-    if sid == benchmark_sid:
-        temp_price = prices.iloc[starting_index:ending_index,:].loc[:,[sid]]
-    else:
-        temp_price = prices.iloc[starting_index:ending_index,:].loc[:,[sid, benchmark_sid]]
+#     if sid == benchmark_sid:
+#         temp_price = prices.iloc[starting_index:ending_index,:].loc[:,[sid]]
+#     else:
+#        temp_price = prices.iloc[starting_index:ending_index,:].loc[:,[sid, benchmark_sid]]
+    temp_price = prices.iloc[starting_index:ending_index][[sid, benchmark_sid]]
             
     beta = calc_beta(sid, benchmark_sid, temp_price)
     if beta is None:
+        #print 'beta is None'
         return
     
     daily_ret = temp_price.pct_change().fillna(0)
@@ -187,14 +191,14 @@ def get_cum_returns(prices, sid, date, days_before, days_after, benchmark_sid):
         # return None
         cum_returns.index = range(starting_index - day_zero_index,
                                   ending_index - day_zero_index)
-    except:
+    except e:
+        print 'exception', e
         return None
+
+    cum_returns = cum_returns - cum_returns.loc[0]  #aligns returns at day 0
     
-    sid_returns      = cum_returns[sid] - cum_returns[sid].ix[0]
-    bench_returns    = cum_returns[benchmark_sid] - cum_returns[benchmark_sid].ix[0]
-    abnormal_returns = cum_returns['abnormal_returns'] - cum_returns['abnormal_returns'].ix[0]
-    
-    return sid_returns, bench_returns, abnormal_returns
+    return cum_returns[sid], cum_returns[benchmark_sid], cum_returns['abnormal_returns']
+
 
 def calc_beta(sid, benchmark, price_history):
     """
@@ -219,25 +223,45 @@ def calc_beta(sid, benchmark, price_history):
     """
     if sid == benchmark:
         return 1.0
-    
-    stock_prices = price_history[sid].pct_change().dropna()
-    bench_prices = price_history[benchmark].pct_change().dropna()
-    aligned_prices = bench_prices.align(stock_prices,join='inner')
-    bench_prices = aligned_prices[0]
-    stock_prices = aligned_prices[1]
-    bench_prices = np.array( bench_prices.values )
-    stock_prices = np.array( stock_prices.values )
-    bench_prices = np.reshape(bench_prices,len(bench_prices))
-    stock_prices = np.reshape(stock_prices,len(stock_prices))
-    if len(stock_prices) == 0:
+
+#     #print 'price_history[sid]', price_history[sid]
+#     stock_prices = price_history[sid].pct_change().dropna()
+#     #print 'stock_prices', stock_prices
+#     bench_prices = price_history[benchmark].pct_change().dropna()
+#     aligned_prices = bench_prices.align(stock_prices,join='inner')
+#     if len(stock_prices) != len(aligned_prices[1]):
+#         print 'aligned change', stock_prices, aligned_prices[1]
+#     #print 'aligned_prices', aligned_prices
+#     bench_prices = aligned_prices[0]
+#     stock_prices = aligned_prices[1]
+#     bench_prices = np.array( bench_prices.values )
+#     stock_prices = np.array( stock_prices.values )
+#     bench_prices = np.reshape(bench_prices,len(bench_prices))
+#     stock_prices = np.reshape(stock_prices,len(stock_prices))
+#     if len(stock_prices) == 0:
+#         return None
+#     regr_results = scipy.stats.linregress(y=stock_prices, x=bench_prices) 
+
+    #TODO: the order of dropna and pct_change matters
+    #price_history = price_history[[sid,benchmark]].dropna().pct_change()[1:]
+    assert len(price_history.columns) == 2
+    #price_history = price_history[[sid, benchmark]].pct_change().dropna()
+    price_history = price_history.pct_change().dropna()
+    if price_history.empty:
         return None
-    regr_results = scipy.stats.linregress(y=stock_prices, x=bench_prices) 
+
+    regr_results2 = scipy.stats.linregress(y=price_history[sid], x=price_history[benchmark])
+    regr_results = regr_results2
+#     assert (stock_prices - price_history[sid].pct_change()[1:].values == 0).all()
+#     assert (bench_prices - price_history[benchmark].pct_change()[1:].values == 0).all(), '%s %s'%(bench_prices, price_history[benchmark].pct_change()[1:].values)
+#    assert regr_results == regr_results2
+    #, 'sid %s sid prices %s\nbench prices %s\naligned %s\nreg %s\nreg2 %s'%\
+    #    (sid, price_history[sid].pct_change()[1:].values, price_history[benchmark].pct_change()[1:].values, stock_prices, regr_results, regr_results2)
     beta = regr_results[0]  
     p_value = regr_results[3]
     if p_value > 0.05:
         beta = 0.
     return beta  
-
 
 # In[7]:
 
@@ -432,9 +456,11 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
     benchmark_returns = []
     abnormal_returns = []
     valid_sids = []
-    liquid_stocks = None
-    
+
     print "Running Event Study"
+    if use_liquid_stocks:
+        liquid_stocks = get_liquid_universe_of_stocks(start_date, start_date, top_liquid=top_liquid)
+
     # Getting 10 extra days of data just to be sure
     extra_days_before = timedelta(days=math.ceil(days_before * 365.0/252.0) + 10)
     extra_days_after = timedelta(days=math.ceil(days_after * 365.0/252.0) + 10)
@@ -446,11 +472,9 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
         start_date = date_group[date_column].min() - extra_days_before
         end_date   = date_group[date_column].max() + extra_days_after
 
-        # duplicated columns would break get_cum_returns
+        # duplicated columns would break get_cum_returns - how?
         pr_sids = set(date_group.sid)
         if use_liquid_stocks:
-            if liquid_stocks is None:
-                liquid_stocks = get_liquid_universe_of_stocks(start_date, start_date, top_liquid=top_liquid)
             pr_sids.intersection_update(liquid_stocks)
 
         #print 'pr_sids', [sid.symbol for sid in pr_sids]
@@ -478,13 +502,13 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
                 benchmark_returns.append(b_returns)
                 abnormal_returns.append(ab_returns)
             
-    sample_size = len(cumulative_returns)
+    #print 'cumulative_returns', cumulative_returns
     returns_volatility          = pd.concat(cumulative_returns, axis=1).std(axis=1)
     abnormal_returns_volatility = pd.concat(abnormal_returns,   axis=1).std(axis=1)
     benchmark_returns           = pd.concat(benchmark_returns,  axis=1).mean(axis=1)
     abnormal_returns            = pd.concat(abnormal_returns,   axis=1).mean(axis=1)
     cumulative_returns          = pd.concat(cumulative_returns, axis=1).mean(axis=1)
-    cumulative_returns.name = sample_size
+    cumulative_returns.name = len(cumulative_returns)
         
     return (cumulative_returns, benchmark_returns, abnormal_returns,
             returns_volatility, abnormal_returns_volatility, valid_sids)
