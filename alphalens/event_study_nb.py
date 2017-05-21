@@ -4,7 +4,6 @@
 # This is an IPython notebook from https://www.quantopian.com/posts/event-study-tearsheet
 # Added to git as .py for easier tracking of changes.
 # Not runnable as .py, copy in quantopian.com research notebook to run.
-# This version is labeled as "Updated 6/16" on the thread, fetched on May 18, 2017
 
 # #Event Study
 # 
@@ -129,8 +128,28 @@ def get_liquid_universe_of_stocks(start_date, end_date, top_liquid=500):
     return security_universe
 
 
+class PerfStats:
+    count = 0
+    seconds = 0.
+    def __repr__(self):
+        return 'seconds: %.2f count: %d'%(self.seconds, self.count)
+import time
+def timer(some_function):
+    #timing decorator
+
+    def wrapper(*args, **kwargs):
+        t1 = time.time()
+        res = some_function(*args, **kwargs)
+        timer.stats[some_function.func_name].seconds += time.time() - t1
+        timer.stats[some_function.func_name].count += 1
+        return res
+    return wrapper
+from collections import defaultdict
+timer.stats = defaultdict(PerfStats)
+
 # In[6]:
 
+@timer
 def get_cum_returns(prices, sid, date, days_before, days_after, benchmark_sid):
     """
     Calculates cumulative and abnormal returns for the sid & benchmark
@@ -242,7 +261,7 @@ def calc_beta(sid, benchmark, price_history):
 #         return None
 #     regr_results = scipy.stats.linregress(y=stock_prices, x=bench_prices) 
 
-    #TODO: the order of dropna and pct_change matters
+    #TODO: the order of dropna and pct_change matters. Maybe not - pct_change skips nan (equivalent to fillna(ffill)) when looking at previous return
     #price_history = price_history[[sid,benchmark]].dropna().pct_change()[1:]
     assert len(price_history.columns) == 2
     #price_history = price_history[[sid, benchmark]].pct_change().dropna()
@@ -262,6 +281,21 @@ def calc_beta(sid, benchmark, price_history):
     if p_value > 0.05:
         beta = 0.
     return beta  
+
+@timer
+def calc_beta_from_pct(sid_pct_change, benchmark_pct_change):
+    if sid_pct_change.name == benchmark_pct_change.name:
+        return 1.0
+    mask = sid_pct_change.notnull() & benchmark_pct_change.notnull()
+    if not mask.any():
+        return None
+
+    regr_results = scipy.stats.linregress(y=sid_pct_change[mask], x=benchmark_pct_change[mask])
+    beta = regr_results[0]
+    p_value = regr_results[3]
+    if p_value > 0.05:
+        beta = 0.
+    return beta
 
 # In[7]:
 
@@ -420,6 +454,7 @@ def plot_cumulative_abnormal_returns(cumulative_returns,
     
 weeks_to_fetch = 3
 
+@timer
 def get_returns(event_data, benchmark, date_column, days_before, days_after,
                 use_liquid_stocks=False, top_liquid=1000):
     """
@@ -466,14 +501,14 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
     extra_days_after = timedelta(days=math.ceil(days_after * 365.0/252.0) + 10)
     benchmark_prices = get_pricing(benchmark, start_date=event_data[date_column].min()-extra_days_before,
                                    end_date=event_data[date_column].max()+extra_days_after, fields='open_price')
-    for _, date_group in event_data.groupby([event_data[date_column].dt.year,
+    for _, week_group in event_data.groupby([event_data[date_column].dt.year,
                                              event_data[date_column].dt.weekofyear//weeks_to_fetch]):
         
-        start_date = date_group[date_column].min() - extra_days_before
-        end_date   = date_group[date_column].max() + extra_days_after
+        start_date = week_group[date_column].min() - extra_days_before
+        end_date   = week_group[date_column].max() + extra_days_after
 
         # duplicated columns would break get_cum_returns - how?
-        pr_sids = set(date_group.sid)
+        pr_sids = set(week_group.sid)
         if use_liquid_stocks:
             pr_sids.intersection_update(liquid_stocks)
 
@@ -483,38 +518,89 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
                              end_date=end_date, fields='open_price')
         prices[benchmark_prices.name] = benchmark_prices
         prices = prices.shift(-1)  #why?
+        global temp_price, pct_change, daily_ret, cum_returns, benchmark_cum, date_group
 
-        for _, row in date_group[['sid', date_column]].iterrows():
-            sid, date = row
-                
-            if use_liquid_stocks and sid not in liquid_stocks:
+        for dt, date_group in week_group.groupby(date_column):
+
+            day_zero_index = prices.index.searchsorted(dt)
+            if prices.index[day_zero_index].date() != dt.date():
+                print 'Event date %s without price, discard sids %s' % (dt.strftime('%a %Y-%m-%d'), date_group.sid.values)
+                #TODO: maybe use previous date price
                 continue
-            valid_sids.append(sid)
 
-            #print 'get_pricing', pr_sids
-            if date in prices.index:
-                results = get_cum_returns(prices, sid, date, days_before, days_after, benchmark)
-                if results is None:
-                    print "Discarding event for %s on %s" % (symbols(sid), date.date())
+            #print 'day_zero_index', day_zero_index
+            starting_index = day_zero_index - days_before
+            ending_index   = day_zero_index + days_after + 1
+
+            if starting_index < 0:
+                print 'Prices did not contain enough days_before, discard sids'%date_group.sid
+                continue
+            if ending_index >= len(prices):
+                print 'Prices did not contain enough days_after, discard sids'%date_group.sid
+                continue
+            temp_price = prices.iloc[starting_index:ending_index]
+            temp_price.index = range(-days_before, days_after+1)
+            #pct_change = temp_price.pct_change()
+            benchmark_pct_change = temp_price[benchmark].pct_change()
+            benchmark_pct_change_fill = benchmark_pct_change.fillna(0)
+
+            #limit to current day symbols only
+            date_group_prices = temp_price.loc[:,temp_price.columns.isin(date_group.sid)]
+            all_nan_symbols = date_group_prices.isnull().all()
+            if all_nan_symbols.any():
+                print 'Discarded symbols with all Nan quotes', \
+                    ', '.join(['%s %d'%(s.symbol, s.sid) for s in all_nan_symbols[all_nan_symbols].index])
+
+            for sid in all_nan_symbols[~all_nan_symbols].index:
+
+                if use_liquid_stocks and sid not in liquid_stocks:
                     continue
-                sid_returns, b_returns, ab_returns = results
-                cumulative_returns.append(sid_returns)
-                benchmark_returns.append(b_returns)
-                abnormal_returns.append(ab_returns)
+                valid_sids.append(sid)
+
+                #print 'get_pricing', pr_sids
+                sid_pct_change = temp_price[sid].pct_change()
+                beta = calc_beta_from_pct(sid_pct_change, benchmark_pct_change)
+                if beta is None:
+                    print 'beta is None. Discard sid %s'%sid
+                    continue
+                #daily_ret = pct_change[[sid, benchmark]].fillna(0)
+                #daily_ret['abnormal_returns'] = daily_ret[sid] - beta*benchmark_pct_change
+                abnormal_pct_change = sid_pct_change.fillna(0) - beta*benchmark_pct_change_fill
+                abnormal_cumprod = (abnormal_pct_change + 1).cumprod()
+                #cum_returns = (daily_ret + 1).cumprod() - 1
+                # day alignment is incorrect - must divide by loc[0] instead of just subtracting
+                # so the changes of other days are measured in day zero percents
+                ##cum_returns = cum_returns / cum_returns.loc[0] - 1
+                #cum_returns = cum_returns - cum_returns.loc[0]  #aligns returns at day 0
+
+                #benchmark_cum = temp_price[benchmark]/temp_price.loc[0,benchmark] - 1
+                #incorrect, but compatible
+                def calc_cumul(prices):
+                    return (prices-prices.loc[0])/prices.iloc[0]
+                benchmark_cum = calc_cumul(temp_price[benchmark])
+                sid_cum = calc_cumul(temp_price[sid])
+                abnormal_cum = calc_cumul(abnormal_cumprod)
+                #assert (cum_returns[benchmark] - benchmark_cum).abs().max() < 1e-10, 'alt cum method verify %s'%(cum_returns[benchmark] - benchmark_cum)
+                #assert (cum_returns[sid] - sid_cum).abs().fillna(0).max() < 1e-10, 'alt cum method verify %s'%(cum_returns[sid] - sid_cum)
+
+                cumulative_returns.append(sid_cum)
+                benchmark_returns.append(benchmark_cum)
+                abnormal_returns.append(abnormal_cum)
             
-    #print 'cumulative_returns', cumulative_returns
+    sample_size = len(cumulative_returns)
     returns_volatility          = pd.concat(cumulative_returns, axis=1).std(axis=1)
     abnormal_returns_volatility = pd.concat(abnormal_returns,   axis=1).std(axis=1)
     benchmark_returns           = pd.concat(benchmark_returns,  axis=1).mean(axis=1)
     abnormal_returns            = pd.concat(abnormal_returns,   axis=1).mean(axis=1)
     cumulative_returns          = pd.concat(cumulative_returns, axis=1).mean(axis=1)
-    cumulative_returns.name = len(cumulative_returns)
+    cumulative_returns.name = sample_size
         
     return (cumulative_returns, benchmark_returns, abnormal_returns,
             returns_volatility, abnormal_returns_volatility, valid_sids)
 
 # In[8]:
 
+@timer
 def run_event_study(event_data, date_column='asof_date',
                     start_date='2007-01-01', end_date='2014-01-01',
                     benchmark=None, days_before=10, days_after=10, top_liquid=500,
