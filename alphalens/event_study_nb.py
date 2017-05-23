@@ -182,6 +182,9 @@ def get_cum_returns(prices, sid, date, days_before, days_after, benchmark_sid):
     
     cum_returns = (daily_ret + 1).cumprod() - 1
     
+    print 'prices-----------:\n', prices, '\ntemp_price-----------:\n', temp_price,\
+        '\ndaily_ret-----------:\n', daily_ret, '\ncum_returns-----------:\n', cum_returns
+    
     try:
         # If there's not enough data for event study,
         # return None
@@ -195,6 +198,7 @@ def get_cum_returns(prices, sid, date, days_before, days_after, benchmark_sid):
     abnormal_returns = cum_returns['abnormal_returns'] - cum_returns['abnormal_returns'].ix[0]
     
     return sid_returns, bench_returns, abnormal_returns
+
 
 def calc_beta(sid, benchmark, price_history):
     """
@@ -394,6 +398,19 @@ def plot_cumulative_abnormal_returns(cumulative_returns,
     plt.legend(["Abnormal Average Cumulative","Simple Average Cumulative", 'Drift'])
     plt.show()
     
+
+def get_pricing_custom(pr_sids, start_date, end_date, fields):
+    print 'get_pricing_custom', pr_sids, start_date, end_date, fields
+    global prices
+    prices = pd.DataFrame({'date': pd.date_range(start_date, end_date)})
+    for sid in pr_sids:
+        prices[sid] = 1 #+ np.array(range(len(prices)))/10
+    prices.set_index('date', inplace=True)
+    prices.loc['2013-2-1'] = 1
+    prices.loc['2013-2-2'] = 1.2
+    return prices
+
+
 def get_returns(event_data, benchmark, date_column, days_before, days_after,
                 use_liquid_stocks=False, top_liquid=1000):
     """
@@ -435,6 +452,7 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
     print "Running Event Study"
     for i, row in event_data[['sid', date_column]].iterrows():
         sid, date = row
+        print 'sid', sid, 'date', date
         
         # Getting 10 extra days of data just to be sure
         extra_days_before = math.ceil(days_before * 365.0/252.0) + 10
@@ -452,8 +470,9 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
 
         # duplicated columns would break get_cum_returns
         pr_sids = set([sid, benchmark])
-        prices = get_pricing(pr_sids, start_date=start_date,
+        prices = get_pricing_custom(pr_sids, start_date=start_date,
                              end_date=end_date, fields='open_price')
+        print 'prices before shift:\n', prices
         prices = prices.shift(-1)
         if date in prices.index:
             results = get_cum_returns(prices, sid, date, days_before, days_after, benchmark)
@@ -464,6 +483,7 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
             cumulative_returns.append(sid_returns)
             benchmark_returns.append(b_returns)
             abnormal_returns.append(ab_returns)
+        else: print 'date not in prices.index', prices, date
             
     sample_size = len(cumulative_returns)
     returns_volatility          = pd.concat(cumulative_returns, axis=1).std(axis=1)
@@ -529,22 +549,25 @@ def run_event_study(event_data, date_column='asof_date',
                                                               use_liquid_stocks=use_liquid_stocks,
                                                               top_liquid=top_liquid)
     event_data = event_data[event_data.sid.isin(valid_sids)]
-    plot_distribution_of_events(event_data, date_column, start_date, end_date)
-
     plot_cumulative_returns(cumulative_returns, days_before, days_after)
     
-    plot_cumulative_returns_against_benchmark(cumulative_returns, benchmark_returns,
-                                              days_before, days_after)
+#     plot_cumulative_returns_against_benchmark(cumulative_returns, benchmark_returns,
+#                                               days_before, days_after)
     
-    plot_cumulative_abnormal_returns(cumulative_returns, abnormal_returns,
-                                     days_before, days_after)
+#     plot_cumulative_abnormal_returns(cumulative_returns, abnormal_returns,
+#                                      days_before, days_after)
     
-    plot_cumulative_returns_with_error_bars(cumulative_returns, returns_volatility,
-                                            days_before, days_after)
+#     plot_cumulative_returns_with_error_bars(cumulative_returns, returns_volatility,
+#                                             days_before, days_after)
     
-    plot_cumulative_returns_with_error_bars(cumulative_returns, abnormal_returns_volatility,
-                                            days_before, days_after, abnormal=True)
+#     plot_cumulative_returns_with_error_bars(cumulative_returns, abnormal_returns_volatility,
+#                                             days_before, days_after, abnormal=True)
 
+df = pd.DataFrame([[pd.to_datetime('2013-2-1'),1]], columns=['asof_date', 'sid'])
+print 'events:\n', df
+run_event_study(df, date_column='asof_date', start_date='2013-1-31', end_date='2013-2-3',
+                    benchmark=1, days_before=0, days_after=1, top_liquid=500,
+                    use_liquid_stocks=False)
 
 # # Run Event Study from 2013 ~ 2014
 
