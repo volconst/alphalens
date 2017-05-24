@@ -456,7 +456,7 @@ weeks_to_fetch = 3
 
 @timer
 def get_returns(event_data, benchmark, date_column, days_before, days_after,
-                use_liquid_stocks=False, top_liquid=1000):
+                use_liquid_stocks=False, top_liquid=1000, get_pricing_func=get_pricing):
     """
     Calculates cumulative returns, benchmark returns, abnormal returns, and
     volatility for cumulative and abnomral returns
@@ -499,7 +499,7 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
     # Getting 10 extra days of data just to be sure
     extra_days_before = timedelta(days=math.ceil(days_before * 365.0/252.0) + 10)
     extra_days_after = timedelta(days=math.ceil(days_after * 365.0/252.0) + 10)
-    benchmark_prices = get_pricing(benchmark, start_date=event_data[date_column].min()-extra_days_before,
+    benchmark_prices = get_pricing_func(benchmark, start_date=event_data[date_column].min()-extra_days_before,
                                    end_date=event_data[date_column].max()+extra_days_after, fields='open_price')
     for _, week_group in event_data.groupby([event_data[date_column].dt.year,
                                              event_data[date_column].dt.weekofyear//weeks_to_fetch]):
@@ -514,10 +514,10 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
 
         #print 'pr_sids', [sid.symbol for sid in pr_sids]
         print 'get_pricing(%d sids, %s, %s)'%(len(pr_sids), start_date.date(), end_date.date())
-        prices = get_pricing(pr_sids, start_date=start_date,
+        prices = get_pricing_func(pr_sids, start_date=start_date,
                              end_date=end_date, fields='open_price')
         prices[benchmark_prices.name] = benchmark_prices
-        prices = prices.shift(-1)  #why?
+        #prices = prices.shift(-1)  #why?
         global temp_price, pct_change, daily_ret, cum_returns, benchmark_cum, date_group
 
         for dt, date_group in week_group.groupby(date_column):
@@ -667,6 +667,29 @@ def run_event_study(event_data, date_column='asof_date',
     plot_cumulative_returns_with_error_bars(cumulative_returns, abnormal_returns_volatility,
                                             days_before, days_after, abnormal=True)
 
+#test with single event
+def get_pricing_custom(pr_sids, start_date, end_date, fields):
+    print 'get_pricing_custom', pr_sids, start_date, end_date, fields
+    global prices
+    prices = pd.DataFrame({'date': pd.date_range(start_date, end_date)})
+    single_sid = isinstance(pr_sids, int)
+    if single_sid:
+        pr_sids = pr_sids,
+    for sid in pr_sids:
+        prices[sid] = 1 #+ np.array(range(len(prices)))/10
+    prices.set_index('date', inplace=True)
+    prices.loc['2013-2-1'] = 1
+    prices.loc['2013-2-2'] = 1.2
+    return prices[pr_sids[0]] if single_sid else prices
+
+df = pd.DataFrame([[pd.to_datetime('2013-2-1'),1]], columns=['asof_date', 'sid'])
+print 'events:\n', df
+# run_event_study(df, date_column='asof_date', start_date='2013-1-31', end_date='2013-2-3',
+#                     benchmark=1, days_before=0, days_after=1, top_liquid=500,
+#                     use_liquid_stocks=False)
+get_returns(df, 1, 'asof_date', days_before=0, days_after=1, use_liquid_stocks=False,
+            get_pricing_func=get_pricing_custom)[0]
+
 
 # # Run Event Study from 2013 ~ 2014
 
@@ -676,7 +699,7 @@ from quantopian.interactive.data.zacks import earnings_surprises
 
 # [2013, 2014)
 #years = range(2013, 2015)
-years = 2015,
+years = 2014,
 import time
 
 # Negative earnings surprises of -50% or more
