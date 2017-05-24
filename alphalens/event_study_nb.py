@@ -574,9 +574,10 @@ def get_returns(event_data, benchmark, date_column, days_before, days_after,
                 #cum_returns = cum_returns - cum_returns.loc[0]  #aligns returns at day 0
 
                 #benchmark_cum = temp_price[benchmark]/temp_price.loc[0,benchmark] - 1
-                #incorrect, but compatible
                 def calc_cumul(prices):
-                    return (prices-prices.loc[0])/prices.iloc[0]
+                    #incorrect, but compatible
+                    #return (prices-prices.loc[0])/prices.iloc[0]
+                    return prices/prices.loc[0] - 1
                 benchmark_cum = calc_cumul(temp_price[benchmark])
                 sid_cum = calc_cumul(temp_price[sid])
                 abnormal_cum = calc_cumul(abnormal_cumprod)
@@ -689,6 +690,27 @@ print 'events:\n', df
 #                     use_liquid_stocks=False)
 get_returns(df, 1, 'asof_date', days_before=0, days_after=1, use_liquid_stocks=False,
             get_pricing_func=get_pricing_custom)[0]
+
+#test with single event days_before percents
+def get_pricing_days_before(pr_sids, start_date, end_date, fields):
+    print 'get_pricing_custom', pr_sids, start_date, end_date, fields
+    prices = pd.DataFrame({'date': pd.date_range(start_date, end_date)})
+    single_sid = isinstance(pr_sids, int)
+    if single_sid:
+        pr_sids = pr_sids,
+    for sid in pr_sids:
+        prices[sid] = 1 #+ np.array(range(len(prices)))/10
+    prices.set_index('date', inplace=True)
+    prices.loc['2013-2-1'] = 0.8
+    prices.loc['2013-2-2'] = 1.
+    return prices[pr_sids[0]] if single_sid else prices
+
+df = pd.DataFrame([[pd.to_datetime('2013-2-2'),1]], columns=['asof_date', 'sid'])
+print 'events:\n', df
+cumul_rets = get_returns(df, 1, 'asof_date', days_before=1, days_after=0, use_liquid_stocks=False,
+            get_pricing_func=get_pricing_days_before)[0]
+print cumul_rets
+assert math.fabs(cumul_rets.loc[-1] - -0.2) < 1e-10, 'expected -0.2 = (1-0.8)/1'
 
 
 # # Run Event Study from 2013 ~ 2014
